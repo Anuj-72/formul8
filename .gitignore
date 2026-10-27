@@ -1,0 +1,12 @@
+# Build output and local binaries.
+/formul8
+/cmd/formul8/formul8
+/dist/
+*.test
+*.out
+coverage.*
+
+# Editor and OS noise.
+.DS_Store
+.idea/
+.vscode/
