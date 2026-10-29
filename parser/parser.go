@@ -336,20 +336,322 @@ func (p *Parser) parseBegin() (ast.Expr, error) {
 		return nil, err
 	}
 
-	if envName == "matrix" || envName == "bmatrix" || envName == "pmatrix" ||
-		// including our newly created ones
-		envName == "Bmatrix" || envName == "vmatrix" || envName == "Vmatrix" {
+	// Only the three reference environments are accepted here. Bmatrix,
+	// vmatrix and Vmatrix belong to the extension in #10 and stay rejected
+	// until that checkpoint lands its parser and backend work together.
+	if envName != "matrix" && envName != "bmatrix" && envName != "pmatrix" {
 		return nil, errs.UnknownEnvironment(envName)
 	}
 
-	bodyStart, depth := p.pos, int(0)
-	switch p.tokens
+	// Scan forward for the \end that closes this environment. Nested
+	// \begin ... \end pairs bump and drop the depth counter, so an inner
+	// matrix does not end the outer one.
+	bodyStart := p.pos
+	depth := 0
+	endPos := -1
+	for endPos < 0 {
+		if p.pos >= len(p.tokens) {
+			return nil, errs.UnclosedEnvironment(envName)
+		}
+
+		tok := p.tokens[p.pos]
+		switch {
+		case tok.Kind == token.KindCommand && tok.Text == "begin":
+			depth++
+			p.pos++
+		case tok.Kind == token.KindCommand && tok.Text == "end":
+			if depth == 0 {
+				endPos = p.pos
+			} else {
+				depth--
+				p.pos++
+			}
+		default:
+			p.pos++
+		}
+	}
+
+	rows, err := p.parseMatrixBody(p.tokens[bodyStart:endPos])
+	if err != nil {
+		return nil, err
+	}
+
+	p.advance() // eat \end
+	if err := p.expect(token.KindLBrace); err != nil {
+		return nil, err
+	}
+
+	endName, err := p.parseContinuousString(token.KindRBrace)
+	if err != nil {
+		return nil, err
+	}
+	if endName != envName {
+		return nil, errs.MismatchedEnvironment(envName, endName)
+	}
+
+	if err := p.expect(token.KindRBrace); err != nil {
+		return nil, err
+	}
+
+	return &ast.Matrix{Name: envName, Rows: rows}, nil
 }
+
+// parseLeftDelimited ports parser.rs:420-485. The \left token itself is the
+// first token of the enclosed slice, and every token up to the matching
+// \right is re-parsed as a sub-expression.
+//
+// The reference ends with unreachable!() for a left delimiter outside
+// ( [ { |, but as_char also admits ) ] }, so `\left)x\right)` reaches that arm
+// from user input. Here it returns ExpectedDelimiter("left") instead of
+// panicking.
 func (p *Parser) parseLeftDelimited() (ast.Expr, error) {
-	return nil, fmt.Errorf("parseLeftDelimited: not implemented")
+	tok, ok := p.peek()
+	if !ok {
+		return nil, errs.ExpectedDelimiter("left")
+	}
+	left, ok := tok.AsChar()
+	if !ok {
+		return nil, errs.ExpectedDelimiter("left")
+	}
+
+	// Depth scan for the matching \right, so nested pairs do not close each
+	// other early.
+	innerStart := p.pos
+	depth := 0
+	matchIdx := -1
+	for i := innerStart; i < len(p.tokens) && matchIdx < 0; i++ {
+		t := p.tokens[i]
+		if t.Kind != token.KindCommand {
+			continue
+		}
+
+		switch t.Text {
+		case "left":
+			depth++
+		case "right":
+			if depth == 0 {
+				matchIdx = i
+			} else {
+				depth--
+			}
+		}
+	}
+	if matchIdx < 0 {
+		return nil, errs.UnclosedLeftRight()
+	}
+	if p.tokens[matchIdx].Text != "right" {
+		return nil, errs.Internal("mismatched delimiter scan")
+	}
+
+	if matchIdx+1 >= len(p.tokens) {
+		return nil, errs.ExpectedDelimiter("right")
+	}
+	right, ok := p.tokens[matchIdx+1].AsChar()
+	if !ok {
+		return nil, errs.ExpectedDelimiter("right")
+	}
+
+	var expectedRight rune
+	switch left {
+	case '(':
+		expectedRight = ')'
+	case '[':
+		expectedRight = ']'
+	case '{':
+		expectedRight = '}'
+	case '|':
+		expectedRight = '|'
+	default:
+		return nil, errs.ExpectedDelimiter("left")
+	}
+	if right != expectedRight {
+		return nil, errs.MismatchedDelimiters(left, right)
+	}
+
+	inner, err := p.parseTokens(p.tokens[innerStart:matchIdx])
+	if err != nil {
+		return nil, err
+	}
+	p.pos = matchIdx + 2
+	return &ast.Delimiter{Left: left, Right: right, Inner: inner}, nil
 }
+
+// parseDelimitedArg ports parser.rs:487-511. The opener was consumed by the
+// caller; this scans forward for its closer at the right nesting depth and
+// re-parses the enclosed slice.
+func (p *Parser) parseDelimitedArg(closeKind token.Kind) (ast.Expr, error) {
+	p.advance()
+	innerStart := p.pos
+	depth := 1
+	matchIdx := -1
+	for i := innerStart; i < len(p.tokens) && matchIdx < 0; i++ {
+		t := p.tokens[i]
+		if isOpenerFor(t.Kind, closeKind) {
+			depth++
+		} else if tokenEq(t.Kind, closeKind) {
+			if depth == 1 {
+				matchIdx = i
+			} else {
+				depth--
+			}
+		}
+	}
+	if matchIdx < 0 {
+		return nil, errs.UnclosedLeftRight()
+	}
+
+	argTokens := p.tokens[innerStart:matchIdx]
+	p.pos = matchIdx + 1
+	return p.parseTokens(argTokens)
+}
+
+// isOpenerFor ports is_opener_for (parser.rs:513) and tokenEq ports token_eq
+// (parser.rs:522). The reference takes &Token and inspects only the variant,
+// so the port takes the kinds directly.
+func isOpenerFor(open, closeKind token.Kind) bool {
+	return (open == token.KindLBrace && closeKind == token.KindRBrace) ||
+		(open == token.KindLParen && closeKind == token.KindRParen) ||
+		(open == token.KindLBracket && closeKind == token.KindRBracket)
+}
+
+func tokenEq(kind, closeKind token.Kind) bool {
+	return (kind == token.KindRBrace && closeKind == token.KindRBrace) ||
+		(kind == token.KindRParen && closeKind == token.KindRParen) ||
+		(kind == token.KindRBracket && closeKind == token.KindRBracket)
+}
+
+// parseCommand ports parser.rs:531-568. Arity, optionality, limits and the
+// string argument all come from the registry entry, so a name with no glyph
+// parses as a bare command with no arguments.
 func (p *Parser) parseCommand(name string) (ast.Expr, error) {
-	return nil, fmt.Errorf("parseCommand: not implemented")
+	g, found := p.registry.Get(name)
+
+	hasOptional := found && g.HasOptional()
+	hasLimits := found && g.HasLimits()
+	takesString := found && g.TakesStringArg()
+	required := 0
+	if found {
+		required = g.RequiredArgs()
+	}
+
+	opts := []ast.Expr{}
+	args := []ast.Expr{}
+
+	if hasOptional {
+		if tok, ok := p.peek(); ok && tok.Kind == token.KindLBracket {
+			opt, err := p.parseDelimitedArg(token.KindRBracket)
+			if err != nil {
+				return nil, err
+			}
+			opts = append(opts, opt)
+		}
+	}
+
+	// A glyph with limits takes its body after the scripts (\int_a^b{f}), so
+	// parseScripted attaches that argument and this must not consume it.
+	if !hasLimits {
+		if takesString {
+			text, err := p.parseStringArg()
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, &ast.Ident{Name: text})
+			required--
+		}
+
+		for i := 0; i < required; i++ {
+			tok, ok := p.peek()
+
+			var arg ast.Expr
+			var err error
+			switch {
+			case ok && tok.Kind == token.KindLBrace:
+				arg, err = p.parseDelimitedArg(token.KindRBrace)
+			case ok && tok.Kind == token.KindLParen:
+				arg, err = p.parseDelimitedArg(token.KindRParen)
+			case ok && tok.Kind == token.KindLBracket:
+				arg, err = p.parseDelimitedArg(token.KindRBracket)
+			default:
+				arg, err = p.parseAtom()
+			}
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, arg)
+		}
+	}
+
+	return &ast.Command{Name: name, Opts: opts, Args: args}, nil
+}
+
+// parseMatrixBody ports parser.rs:624-662. Cells split on & and rows on \\,
+// but only at brace depth zero and nested-environment depth zero, so a nested
+// matrix inside a cell survives intact. Ragged rows are returned as they are:
+// the reference reports MismatchedMatrixRows at render time, not here.
+func (p *Parser) parseMatrixBody(tokens []token.Token) ([][]ast.Expr, error) {
+	rows := [][]ast.Expr{}
+	currentRow := []ast.Expr{}
+	cellStart := 0
+	depth := 0
+	envDepth := 0
+
+	for i, t := range tokens {
+		switch {
+		case t.Kind == token.KindLBrace || t.Kind == token.KindLBracket || t.Kind == token.KindLParen:
+			depth++
+		case t.Kind == token.KindRBrace || t.Kind == token.KindRBracket || t.Kind == token.KindRParen:
+			if depth > 0 {
+				depth--
+			}
+		case t.Kind == token.KindCommand && t.Text == "begin":
+			envDepth++
+		case t.Kind == token.KindCommand && t.Text == "end":
+			if envDepth > 0 {
+				envDepth--
+			}
+		case t.Kind == token.KindAmpersand && depth == 0 && envDepth == 0:
+			cell, err := p.parseTokens(tokens[cellStart:i])
+			if err != nil {
+				return nil, err
+			}
+			currentRow = append(currentRow, cell)
+			cellStart = i + 1
+		case t.Kind == token.KindEscape && t.Text == "\\" && depth == 0 && envDepth == 0:
+			cell, err := p.parseTokens(tokens[cellStart:i])
+			if err != nil {
+				return nil, err
+			}
+			currentRow = append(currentRow, cell)
+			rows = append(rows, currentRow)
+			currentRow = []ast.Expr{}
+			cellStart = i + 1
+		}
+	}
+
+	if cellStart < len(tokens) {
+		cell, err := p.parseTokens(tokens[cellStart:])
+		if err != nil {
+			return nil, err
+		}
+		currentRow = append(currentRow, cell)
+	}
+	if len(currentRow) > 0 || len(rows) == 0 {
+		rows = append(rows, currentRow)
+	}
+
+	return rows, nil
+}
+
+// parseTokens ports parser.rs:664-678: a sub-parser over a token slice, so a
+// nested parse keeps its own cursor without disturbing the caller's. An empty
+// slice is Expr::Empty, which is how an empty matrix cell is represented.
+func (p *Parser) parseTokens(tokens []token.Token) (ast.Expr, error) {
+	if len(tokens) == 0 {
+		return &ast.Empty{}, nil
+	}
+
+	sub := New(p.input, tokens, p.registry)
+	return sub.ParseExpr()
 }
 
 func (p *Parser) parseScripted() (ast.Expr, error) {
@@ -431,53 +733,50 @@ func (p *Parser) parseJuxtapose() (ast.Expr, error) {
 		return &ast.Empty{}, nil
 	}
 
-	exp, err := p.parseScripted()
+	first, err := p.parseScripted()
 	if err != nil {
 		return nil, err
 	}
 
-	var exprs []ast.Expr
-	exprs = append(exprs, exp)
+	exprs := []ast.Expr{first}
 
-	for {
-		tok, ok := p.peek()
-		if ok &&
-			token.KindLBrace == tok.Kind ||
-			token.KindLParen == tok.Kind ||
-			token.KindRParen == tok.Kind ||
-			token.KindLBracket == tok.Kind ||
-			token.KindRBracket == tok.Kind ||
-			token.KindNumber == tok.Kind ||
-			token.KindIdent == tok.Kind ||
-			token.KindCommand == tok.Kind ||
-			token.KindEscape == tok.Kind ||
-			token.KindBang == tok.Kind ||
-			token.KindAmpersand == tok.Kind ||
-			token.KindSlash == tok.Kind ||
-			token.KindComma == tok.Kind ||
-			token.KindDot == tok.Kind ||
-			token.KindColon == tok.Kind ||
-			token.KindSemicolon == tok.Kind ||
-			token.KindLess == tok.Kind ||
-			token.KindGreater == tok.Kind ||
-			token.KindQuestion == tok.Kind ||
-			token.KindAt == tok.Kind ||
-			token.KindHash == tok.Kind ||
-			token.KindDollar == tok.Kind ||
-			token.KindPercent == tok.Kind ||
-			token.KindTilde == tok.Kind ||
-			token.KindQuote == tok.Kind ||
-			token.KindBacktick == tok.Kind {
-			exprs = append(exprs, exp)
-			continue
+	// Each iteration parses a fresh parseScripted. The reference appended the
+	// node it had already parsed without consuming a token, which looped
+	// forever on input as ordinary as "x + y".
+	for p.canContinueJuxtapose() {
+		next, err := p.parseScripted()
+		if err != nil {
+			return nil, err
 		}
-		break
+		exprs = append(exprs, next)
 	}
 
 	if len(exprs) == 1 {
 		return exprs[0], nil
-	} else {
-		return &ast.Juxtapose{Items: exprs}, nil
+	}
+	return &ast.Juxtapose{Items: exprs}, nil
+}
+
+// canContinueJuxtapose ports the token set of the while-let loop in
+// parse_juxtapose (parser.rs:224-250). It is canStartAtom minus Pipe, Minus
+// and Plus: those three can open an atom but never continue one, so parseBinop
+// and the unary-minus arm of parseAtom get to claim them.
+func (p *Parser) canContinueJuxtapose() bool {
+	tok, ok := p.peek()
+	if !ok {
+		return false
+	}
+
+	switch tok.Kind {
+	case token.KindLBrace, token.KindLParen, token.KindRParen, token.KindLBracket, token.KindRBracket,
+		token.KindNumber, token.KindIdent, token.KindCommand, token.KindEscape, token.KindBang,
+		token.KindAmpersand, token.KindSlash,
+		token.KindComma, token.KindDot, token.KindColon, token.KindSemicolon, token.KindLess,
+		token.KindGreater, token.KindQuestion, token.KindAt, token.KindHash, token.KindDollar,
+		token.KindPercent, token.KindTilde, token.KindQuote, token.KindBacktick:
+		return true
+	default:
+		return false
 	}
 }
 
