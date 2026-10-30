@@ -1,0 +1,26 @@
+formul8
+Copyright 2026 Anuj-72
+
+formul8 is a Go port of txm (Terminal TeX Math), a terminal LaTeX math
+renderer by thatmagicalcat:
+
+    https://github.com/thatmagicalcat/txm
+
+Ported baseline: commit 26e6d3cfef4d5d040711f4c49d9147aabd350d4d
+("add C/C++ bindings", 2026-07-19).
+
+txm is dual-licensed under MIT OR Apache-2.0 and carries the notice
+
+    Copyright (c) 2026 thatmagicalcat
+
+formul8 is distributed under the same dual licence. See LICENSE-MIT and
+LICENSE-APACHE, which retain the upstream copyright notice.
+
+The Rust sources of txm are not redistributed here. A checkout of the
+reference lives at reference/txm in a development clone only, where it serves
+as the executable oracle for port parity and is kept out of Git.
+
+Added beyond the reference: the Bmatrix, vmatrix and Vmatrix matrix
+environments, tracked in milestone v0.2.0. The matrix, bmatrix and pmatrix
+environments, the parser, the layout tree, the renderer and both backends are
+ports of the reference.

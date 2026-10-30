@@ -1,12 +1,19 @@
-# Build output and local binaries.
+# Build output, local binaries and profiles.
 /formul8
 /cmd/formul8/formul8
 /dist/
 *.test
 *.out
 coverage.*
+*.prof
 
 # Editor and OS noise.
 .DS_Store
 .idea/
 .vscode/
+*.swp
+*~
+
+# Local-only material - the upstream reference clone and tool session files -
+# is excluded per clone through .git/info/exclude instead of this file, because
+# it is not part of the published repository. See CONTRIBUTING.md.
