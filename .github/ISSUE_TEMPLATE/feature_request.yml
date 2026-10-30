@@ -1,0 +1,56 @@
+name: Feature request
+description: Propose work that is not yet tracked, either a parity gap or an extension.
+title: "feat: "
+labels: ["type: feat"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One issue is one pull request. If the idea needs two pull requests, file two issues and link them with `Depends on #...` or `Blocks #...`.
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Parity or extension
+      description: Parity means the reference already does this and formul8 does not. Extension means formul8 would go beyond the reference.
+      options:
+        - parity
+        - extension
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is missing
+      description: The concrete gap, with an expression that demonstrates it where possible.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: The shape of the change, not the implementation. Name the packages or the Rust module it would port.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Checkboxes a reviewer can verify without reading the implementation.
+      placeholder: |
+        - [ ] Input renders with the expected output.
+        - [ ] Malformed input returns an error instead of panicking.
+        - [ ] docs/parity.md is updated.
+    validations:
+      required: true
+
+  - type: input
+    id: reference
+    attributes:
+      label: Reference pointer
+      description: For parity work, the file and line range in txm that the issue covers, for example `src/render.rs:6-183`.
+    validations:
+      required: false

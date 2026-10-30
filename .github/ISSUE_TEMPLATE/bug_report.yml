@@ -1,0 +1,59 @@
+name: Bug report
+description: Report output that is wrong, crashes, or disagrees with the reference.
+title: "fix: "
+labels: ["type: fix"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        formul8 is a port, so the first question about any wrong output is whether the reference agrees. A report that includes the reference result can be acted on immediately; one without it has to be investigated first.
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: What happens
+      description: The exact expression, the exact output, and the command that produced it.
+      render: console
+      placeholder: |
+        $ formul8 --unboxed 'x^'
+        panic: runtime error: index out of range [1] with length 1
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should happen
+      description: The output you expected, or the fact that it should be an error rather than a crash.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reference
+    attributes:
+      label: Reference behaviour
+      description: The same input through txm at the baseline commit, copied verbatim, including the exit status. Write "extension" if the input only works in the matrix environments formul8 adds.
+      render: console
+      placeholder: |
+        $ reference/txm/target/debug/txm --unboxed 'x^'
+        (output)
+        exit=0
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Commit or version
+      description: The formul8 revision you ran, from `git rev-parse --short HEAD`.
+      placeholder: 2857302
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Terminal and Go version
+      description: The terminal emulator, its font, and `go version`. Font matters because a missing glyph changes what you see, not just how it looks.
+    validations:
+      required: false
