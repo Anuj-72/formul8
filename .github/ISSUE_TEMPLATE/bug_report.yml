@@ -46,7 +46,7 @@ body:
     attributes:
       label: Commit or version
       description: The formul8 revision you ran, from `git rev-parse --short HEAD`.
-      placeholder: 2857302
+      placeholder: "2857302"
     validations:
       required: true
 
